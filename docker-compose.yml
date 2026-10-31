@@ -1,0 +1,53 @@
+services:
+  ecc:
+    image: ghcr.io/david-yj-52/d94-app-ecc:${IMAGE_TAG:-latest}
+    container_name: d94-ecc
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ECC_REDIS_URL: redis://redis:6379/0
+      ECC_EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOSTNAME:-d94-ecc}
+      ECC_EUREKA_INSTANCE_PORT: 8080
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8085}:8080"
+    volumes:
+      - "${WORKSPACE_HOST_PATH:-./workspace}:/workspace"
+      - "${CLI_AUTH_HOST_PATH:-./cli-auth}:/home/ecc"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - ecc-internal
+      - cloud
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/actuator/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: d94-ecc-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - ecc-redis:/data
+    networks:
+      - ecc-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  ecc-internal:
+    internal: true
+  cloud:
+    external: true
+    name: ${CLOUD_NETWORK_NAME:-befw-cloud-network}
+
+volumes:
+  ecc-redis:
+
