@@ -28,7 +28,7 @@
 - `ecc/execution/runner.py`: workspace 검사, 실행 인자, queue, timeout
 - `ecc/telegram/bot.py`: approve 후 실행 호출
 - `ecc/config/settings.py`: CLI allowlist·경로·timeout 설정
-- `ecc/tickets/query_client.py`: query에서 승인을 조건부 처리하고 실행 결과를 저장
+- `ecc/tickets/store.py`: 임시 메모리에서 승인 상태를 처리하고 실행 결과를 저장
 
 현재 CLI 실행은 동일 컨테이너 안에서 이뤄집니다. 호스트 설치 CLI를 원격 호출하지 않습니다. 작업 프롬프트를 실행하는 행위는 승인된 변경을 작업공간에 수행할 수 있으므로 승인 전에 계획과 대상 workspace를 확인해야 합니다.
 

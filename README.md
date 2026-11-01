@@ -6,7 +6,7 @@ ECC(External Communication Channel)는 Telegram에서 개발 요청을 받고, �
 
 - Telegram `/task` 명령과 승인·거절 버튼
 - `X-ECC-Token` 인증을 사용하는 티켓 생성·조회 REST API
-- d94-query PostgreSQL 기반 티켓 상태 저장·조회 및 승인 원자 처리
+- 임시 단일 프로세스 티켓 상태 저장·승인 처리 (d94-query 티켓 API 제공 후 연동 예정)
 - 선택적 Jetson Nano 분류기 및 Eureka 등록
 - 허용된 작업공간에서의 순차 CLI 실행
 - GitHub Actions의 GHCR 이미지 게시와 Docker Compose 배포

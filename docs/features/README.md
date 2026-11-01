@@ -8,5 +8,5 @@
 | REST 티켓 생성·인증·조회 | [rest-api.md](rest-api.md) | `ecc/api`, `ecc/tickets` |
 | Nano 의도 분류 | [intent-classification.md](intent-classification.md) | `ecc/intent` |
 | CLI 실행·workspace 경계 | [cli-execution.md](cli-execution.md) | `ecc/execution` |
-| d94-query·설정·Eureka 연동 | [runtime-infrastructure.md](runtime-infrastructure.md) | `ecc/tickets`, `ecc/config`, `ecc/api` |
+| 티켓 저장·설정·Eureka | [runtime-infrastructure.md](runtime-infrastructure.md) | `ecc/tickets`, `ecc/config`, `ecc/api` |
 

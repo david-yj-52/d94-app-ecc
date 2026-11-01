@@ -16,7 +16,7 @@
 AGENTS.md (L1)
 ├── ecc/api/AGENTS.md .............. FastAPI 수명주기·REST 경로
 ├── ecc/telegram/AGENTS.md ......... Telegram 입력·승인 콜백
-├── ecc/tickets/AGENTS.md .......... 티켓 상태·d94-query API client
+├── ecc/tickets/AGENTS.md .......... 티켓 모델·임시 저장소
 ├── ecc/intent/AGENTS.md ........... Nano 분류기·대체 계획
 ├── ecc/execution/AGENTS.md ........ 허용 CLI·작업 큐·작업공간
 └── ecc/config/AGENTS.md ........... 환경 설정·Eureka
@@ -28,7 +28,7 @@ AGENTS.md (L1)
 
 - ECC(External Communication Channel)는 Telegram 또는 인증된 REST 요청을 티켓으로 만들고, 선택적으로 Jetson Nano에 의도 분류를 요청한 뒤 Telegram의 명시적 승인을 기다립니다.
 - 승인된 CLI 작업은 ECC 프로세스 안의 단일 큐에서 차례로 실행됩니다.
-- 티켓·승인·실행 결과의 유일한 저장소는 d94-query와 PostgreSQL입니다. ECC는 d94-query의 서비스 API를 호출합니다.
+- 현재 티켓·승인·실행 결과는 ECC 프로세스 메모리에만 저장합니다. d94-query의 티켓 API가 제공되면 ECC 저장 경계를 그 API로 갱신합니다.
 - FastAPI와 CLI 실행기는 **같은 컨테이너 안에서 실행**됩니다. Docker 호스트의 CLI는 컨테이너에서 자동으로 보이지 않습니다. 실행 호스트에 CLI를 설치한 파생 이미지를 준비해야 합니다.
 - 서비스 탐색(Eureka)은 선택 기능입니다. Config Server에서 설정을 자동으로 읽지는 않습니다.
 
@@ -38,7 +38,7 @@ AGENTS.md (L1)
 |---|---|
 | 런타임·API | Python 3.12, FastAPI, Uvicorn |
 | Telegram | aiogram 3, long polling (ECC에서 Telegram으로 아웃바운드 연결) |
-| 티켓 상태 | d94-query REST API와 PostgreSQL |
+| 티켓 상태 | 임시 단일 프로세스 메모리 저장소 (d94-query API 제공 후 연동 예정) |
 | 연동 | httpx, 선택적 py-eureka-client |
 | 배포 | Docker 이미지, GitHub Actions → GHCR, 수동 Docker Compose |
 
@@ -55,14 +55,14 @@ AGENTS.md (L1)
 1. Telegram 요청·승인 콜백은 `ECC_TELEGRAM_ALLOWED_USER_IDS`의 숫자 사용자 ID만 허용합니다.
 2. 봇 토큰과 사용자 ID allowlist가 없으면 서비스 기동을 거부합니다. 토큰은 소스·문서·이미지에 넣지 않습니다.
 3. `/actuator/health`를 제외한 ECC REST 경로는 `X-ECC-Token` 인증을 요구합니다. 운영에서는 포트를 loopback 또는 신뢰된 내부망에만 공개합니다.
-4. d94-query 호출은 ECC와 query에 동일하게 설정한 `ECC_QUERY_SERVICE_TOKEN` / `ECC_SERVICE_TOKEN`으로 인증합니다.
+4. 티켓 상태는 현재 ECC 단일 프로세스에만 존재하며, 재시작 후 복구되지 않습니다.
 5. Nano가 고른 CLI도 `ECC_CLI_ALLOWLIST`에 없으면 실행하지 않습니다. 허용 CLI 집합이 비었으면 실행할 대상이 없습니다.
 6. 작업공간은 `ECC_CLI_WORKSPACES` 아래의 디렉터리만 허용합니다. 요청 경로를 정규화한 뒤 검사합니다.
-7. 티켓 상태를 ECC 메모리나 별도 Redis에 복제하지 않습니다. 생성·조회·승인 전이·결과 저장은 모두 d94-query를 거칩니다.
-8. d94-query는 `AWAITING_CONFIRM` 상태에 조건부 SQL 갱신을 적용해 한 번만 승인·거절합니다. 승인 전에는 CLI를 실행하지 않습니다.
+7. Redis를 사용하지 않습니다. 임시 저장소의 잠금으로 ECC 한 인스턴스 안의 승인 중복을 막습니다.
+8. 승인 전에는 CLI를 실행하지 않습니다. d94-query 티켓 API 제공 시 상태 저장과 원자적 승인 처리를 해당 API로 옮깁니다.
 9. CLI는 셸 문자열로 실행하지 않습니다. `create_subprocess_exec`에 고정된 인자 형식으로 전달하고, 단일 작업 큐에서 실행합니다.
 10. CLI 작업 큐는 프로세스 내부 메모리입니다. ECC는 한 인스턴스만 운영합니다.
-11. 작업 프롬프트와 CLI 결과는 민감 정보를 포함할 수 있습니다. 로그에 원문을 남기지 말고 d94-query DB·CLI 인증 디렉터리를 보호합니다.
+11. 작업 프롬프트와 CLI 결과는 민감 정보를 포함할 수 있습니다. 로그에 원문을 남기지 말고 CLI 인증 디렉터리를 보호합니다.
 12. 배포 workflow는 이미지를 GHCR에 올립니다. 서버 배포는 운영자가 Compose `pull`/`up -d`로 수행합니다.
 
 ## 4. 변경 절차와 문서 동기화

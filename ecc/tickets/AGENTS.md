@@ -4,20 +4,20 @@
 
 ## 책임
 
-작업 요청, 분류 계획, 승인 및 실행 결과의 데이터 모델과 d94-query API client를 담당합니다. 상태의 실제 저장은 d94-query PostgreSQL입니다.
+작업 요청, 분류 계획, 승인 및 실행 결과의 데이터 모델과 임시 단일 프로세스 저장소를 담당합니다. d94-query 티켓 API가 제공되면 이 저장 경계를 API client로 교체합니다.
 
 ## 파일과 계약
 
 | 파일 | 책임 |
 |---|---|
 | `models.py` | `CreateTicket`, `IntentPlan`, `Ticket`, `TicketStatus` |
-| `query_client.py` | d94-query create/get/decision/result API 호출 |
+| `store.py` | 임시 티켓 생성·조회·상태 전이. 프로세스 재시작 시 상태는 사라짐 |
 
 ## 불변식
 
 - 상태 전이: `CREATED` → `AWAITING_CONFIRM` → `PROCESSING` → `DONE` 또는 `FAILED`; 거절은 `AWAITING_CONFIRM` → `REJECTED`입니다.
-- 티켓 상태를 ECC 메모리나 Redis에 복제하지 않습니다.
+- Redis를 사용하지 않습니다. 현재 상태는 프로세스 메모리에만 있으며 재시작 시 사라집니다.
+- d94-query 티켓 API가 아직 없으므로, 해당 API가 제공되면 이 모듈을 연결해 영속화합니다.
 - 새 상태나 필드의 의미를 바꾸면 L3와 L4, API 응답 계약을 함께 갱신합니다.
-- `X-ECC-Service-Token`으로 d94-query에 인증합니다. ECC와 query의 secret 설정값을 일치시킵니다.
-- d94-query의 조건부 SQL 상태 전이가 승인 중복을 방지합니다.
+- asyncio lock으로 한 ECC 프로세스 안에서 중복 승인·거절을 방지합니다.
 

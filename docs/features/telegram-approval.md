@@ -14,14 +14,14 @@
 | 작업 디렉터리 | `ECC_TELEGRAM_DEFAULT_WORKSPACE`를 runner에서 확인 |
 | 분류 | `ecc.intent.classifier.classify` 호출 |
 | 승인 메시지 | ticket ID, intent, CLI, summary, action plan 표시 |
-| 승인/거절 | d94-query에서 상태가 `AWAITING_CONFIRM`인 티켓을 조건부 갱신 |
+| 승인/거절 | ECC 단일 프로세스 메모리에서 잠금 후 `AWAITING_CONFIRM` 티켓 상태 변경 |
 | 결과 | 실행 완료/실패를 티켓에 저장하고 Telegram 메시지로 회신 |
 
 ## 실패와 경계
 
 - 미허용 사용자는 티켓 생성·승인·거절을 할 수 없습니다.
 - 분류 실패는 `FAILED` 티켓으로 저장하고 실행하지 않습니다.
-- d94-query 상태 변경이 충돌하거나 실패하면 실행하지 않습니다.
+- 티켓이 없거나 이미 처리된 경우 실행하지 않습니다.
 - 현재 Telegram polling은 ECC 프로세스 수명주기에 종속됩니다. ECC가 꺼져 있으면 업데이트를 처리하지 않습니다.
 
 ## 코드 위치

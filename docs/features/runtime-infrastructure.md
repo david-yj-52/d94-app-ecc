@@ -1,23 +1,14 @@
-# d94-query·설정·Eureka 연동 (L4)
+# 런타임·인프라 연동 (L4)
 
 ## 티켓 상태 저장
 
-ECC는 별도 Redis나 메모리에 티켓 상태를 보관하지 않습니다. 모든 티켓 생성·조회·승인 전이·실행 결과 저장은 d94-query 서비스 API를 호출하며, d94-query는 PostgreSQL의 `SN_ECC_TICKET`에 상태를 보관합니다.
+현재 티켓 상태는 ECC 한 프로세스의 메모리에만 저장합니다. Redis나 d94-query 테이블은 사용하지 않습니다. ECC가 재시작되면 기존 티켓을 조회하거나 승인할 수 없습니다. 따라서 현재는 ECC를 한 인스턴스로 운영합니다.
 
-ECC 설정은 `ECC_QUERY_BASE_URL`(기본 `http://d94-query:8080/tsh`)과 `ECC_QUERY_SERVICE_TOKEN`입니다. query 저장소에는 같은 비밀값을 `ECC_SERVICE_TOKEN`으로 설정해야 합니다.
-
-| 메서드 | 경로 (context path 제외) | 설명 |
-|---|---|---|
-| POST | `/api/v1/ecc/tickets` | `AWAITING_CONFIRM` 또는 분류 실패 `FAILED` 티켓 생성 |
-| GET | `/api/v1/ecc/tickets/{ticket_id}` | 상태 조회 |
-| POST | `/api/v1/ecc/tickets/{ticket_id}/decision` | `AWAITING_CONFIRM` → `PROCESSING` 또는 `REJECTED` 조건부 전이 |
-| PATCH | `/api/v1/ecc/tickets/{ticket_id}/result` | `PROCESSING` → `DONE` 또는 `FAILED` 조건부 전이 |
-
-모든 요청은 `X-ECC-Service-Token` 헤더를 사용합니다. query의 조건부 DB update가 한 티켓의 승인을 한 번만 성공시킵니다.
+d94-query에서 ECC 티켓 API를 제공하면 ECC의 저장소 경계를 해당 API로 교체합니다. 이때까지는 d94-query에 ECC 전용 테이블이나 API를 추가하지 않습니다.
 
 ## Redis
 
-ECC 자체는 Redis에 연결하지 않으며 Compose에서도 Redis를 실행하지 않습니다. d94-query나 다른 인프라 기능이 기존 Redis를 사용하는 경우 그 구성은 해당 서비스의 소유입니다. ECC 티켓 기능을 위해 ECC가 Redis를 별도로 요구하지 않습니다.
+ECC는 Redis에 연결하지 않으며 Compose에서도 Redis를 실행하지 않습니다. 향후 별도 기능이 Redis를 요구하면 이미 구축된 인프라 Redis를 사용하도록 해당 기능의 설정을 추가합니다.
 
 ## 설정
 
@@ -31,10 +22,6 @@ Spring Cloud Config Server에서 설정을 내려받는 기능은 아직 구현�
 
 ## 코드 위치
 
-- `ecc/tickets/query_client.py`: d94-query API 호출과 응답 envelope 처리
-- `ecc/api/app.py`: query client와 Eureka 수명주기
-- d94-query `EccTicketController`: 서비스 토큰 검증과 REST 경로
-- d94-query `EccTicketService`: 상태 전이 규칙·tenant 선택
-- d94-query `EccTicketModel` / `EccTicketRepo`: PostgreSQL 엔티티 및 조건부 갱신
-- d94-query `V310__create_ecc_ticket.sql`: 테이블·인덱스
-
+- `ecc/tickets/store.py`: 현재 임시 메모리 저장소
+- `ecc/api/app.py`: 앱 수명주기와 임시 저장소 연결
+- `ecc/config/settings.py`: 런타임 환경 변수

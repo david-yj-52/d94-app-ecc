@@ -69,9 +69,9 @@ async def run_bot(app) -> None:
             ticket.status = TicketStatus.FAILED
             ticket.result = "Intent classification failed"
             ticket.summary = "요청 분류에 실패했습니다."
-            ticket = await app.state.query_client.create(ticket)
+            ticket = await app.state.ticket_store.create(ticket)
             return await message.answer(f"분류 실패: {ticket.ticket_id}")
-        ticket = await app.state.query_client.create(ticket)
+        ticket = await app.state.ticket_store.create(ticket)
         await message.answer(
             f"[작업 승인 요청]\n티켓: {ticket.ticket_id}\n의도: {ticket.intent}\nCLI: {ticket.target_cli}\n"
             f"요약: {ticket.summary}\n\n[계획]\n" + "\n".join(
@@ -86,9 +86,11 @@ async def run_bot(app) -> None:
             return await query.answer("허용되지 않은 사용자입니다.", show_alert=True)
         action, ticket_id = (query.data or "").split(":", 1)
         try:
-            ticket = await app.state.query_client.decide(ticket_id, action, query.from_user.id)
+            ticket = await app.state.ticket_store.decide(ticket_id, action, query.from_user.id)
+            if ticket is None:
+                return await query.answer("이미 처리되었거나 티켓을 찾을 수 없습니다.", show_alert=True)
         except Exception:
-            return await query.answer("이미 처리되었거나 query 서버에 연결할 수 없습니다.", show_alert=True)
+            return await query.answer("티켓 상태를 변경할 수 없습니다.", show_alert=True)
         if action == "reject":
             if query.message:
                 await query.message.edit_text(f"티켓 {ticket_id} 거절됨")
@@ -98,9 +100,11 @@ async def run_bot(app) -> None:
         await query.answer("승인했습니다.")
         try:
             result = await app.state.executor.execute(ticket.target_cli, ticket.workspace, ticket.prompt)
-            ticket = await app.state.query_client.finish(ticket_id, TicketStatus.DONE, result)
+            ticket = await app.state.ticket_store.finish(ticket_id, TicketStatus.DONE, result)
         except Exception as exc:
-            ticket = await app.state.query_client.finish(ticket_id, TicketStatus.FAILED, str(exc)[:12000])
+            ticket = await app.state.ticket_store.finish(ticket_id, TicketStatus.FAILED, str(exc)[:12000])
+        if ticket is None:
+            return await bot.send_message(query.from_user.id, f"티켓 상태를 갱신할 수 없습니다: {ticket_id}")
         await bot.send_message(query.from_user.id, f"[{ticket.status}] {ticket_id}\n\n{(ticket.result or '')[-3500:]}")
 
     try:

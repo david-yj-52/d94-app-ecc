@@ -7,7 +7,7 @@ GitHub Actions는 Python 패키지 검증과 컨테이너 이미지 빌드·게�
 ECC는 승인된 AI CLI를 실행합니다. 따라서 **CLI가 설치·인증된 개발 PC 또는 전용 실행 호스트**에 배포해야 합니다. 기본 GHCR 이미지는 Claude·Gemini·Codex CLI를 포함하지 않습니다. 기존 로컬 Compose에서 CLI가 호스트에만 설치되어 있다면 컨테이너가 자동으로 사용할 수 없으므로, CLI를 포함한 파생 이미지를 준비해야 합니다.
 
 ```text
-Telegram ──polling──▶ ECC 실행 호스트 ──HTTP──▶ d94-query ──▶ PostgreSQL
+Telegram ──polling──▶ ECC 실행 호스트
                            ├── Jetson Nano (선택 분류기)
                            └── 승인된 CLI ──▶ 마운트한 작업공간
 ```
@@ -52,8 +52,6 @@ mkdir -p workspace cli-auth
 | 변수 | 설명 |
 |---|---|
 | `ECC_API_TOKEN` | REST API용 긴 무작위 비밀값 |
-| `ECC_QUERY_BASE_URL` | d94-query 주소와 `/tsh` context path. 기본 `http://d94-query:8080/tsh` |
-| `ECC_QUERY_SERVICE_TOKEN` | query의 `ECC_SERVICE_TOKEN`과 동일한 서비스 인증 비밀값 |
 | `ECC_TELEGRAM_BOT_TOKEN` | BotFather가 발급한 토큰. 필수 |
 | `ECC_TELEGRAM_ALLOWED_USER_IDS` | 요청·승인 가능한 Telegram 숫자 사용자 ID 목록. 쉼표 구분, 필수 |
 | `ECC_TELEGRAM_DEFAULT_WORKSPACE` | Telegram `/task` 작업 경로. 기본 `/workspace` |
@@ -68,9 +66,9 @@ Telegram 봇 토큰 또는 사용자 ID allowlist가 없으면 ECC가 시작되�
 
 기동 후 allowlist에 등록한 각 사용자는 Telegram에서 봇을 열고 `/start`를 먼저 보내야 합니다. 봇이 사용자의 대화를 먼저 시작할 수 없기 때문입니다. `/task <요청>`으로 요청하면 계획과 승인 버튼이 돌아옵니다. REST에서 티켓을 만들면 ECC가 allowlist의 가장 작은 숫자 ID를 대상으로 승인 메시지를 보내므로, 그 계정도 먼저 `/start`를 보내야 합니다.
 
-기본 `docker-compose.yml`은 ECC에 외부 통신용 bridge를 연결합니다. Telegram polling에는 Eureka 네트워크가 필요하지 않습니다. d94-query가 같은 Docker 네트워크에 있으면 `docker-compose.cloud.yml` overlay로 ECC를 연결합니다. Eureka 등록을 켤 때도 이 overlay를 사용합니다. query가 다른 호스트에 있으면 ECC 실행 호스트에서 접근 가능한 HTTPS/VPN 주소를 `ECC_QUERY_BASE_URL`에 설정합니다. ECC Compose는 Redis를 설치하거나 실행하지 않습니다.
+기본 `docker-compose.yml`은 ECC에 외부 통신용 bridge를 연결합니다. Telegram polling에는 Eureka 네트워크가 필요하지 않습니다. Eureka 등록을 켜면 `docker-compose.cloud.yml` overlay로 ECC를 공유 네트워크에 연결합니다. ECC Compose는 Redis를 설치하거나 실행하지 않습니다.
 
-새 티켓 API를 사용하려면 d94-query의 ECC 티켓 지원 이미지부터 배포해 Flyway `V310` 마이그레이션을 적용한 뒤 ECC를 배포합니다. query의 `.env`에 `ECC_SERVICE_TOKEN`을 설정하고 ECC의 `ECC_QUERY_SERVICE_TOKEN`에도 같은 값을 설정합니다.
+현재 티켓 상태는 ECC 프로세스 메모리에만 저장됩니다. d94-query에서 티켓 API가 제공되면 ECC 연동 버전을 배포할 예정입니다.
 
 ## 4. 파생 실행 이미지와 CLI 인증
 
@@ -101,7 +99,7 @@ Eureka 등록을 켠 경우에는 두 Compose 파일을 함께 지정합니다.
 docker compose -f docker-compose.yml -f docker-compose.cloud.yml --env-file .env up -d
 ```
 
-배포 후 `/actuator/health`의 `status`가 `UP`인지 확인합니다. 이전 버전으로 되돌리려면 `.env`의 `IMAGE_TAG`를 이전 semver 또는 `sha-...`로 변경하고 `pull`, `up -d`를 다시 실행합니다. 티켓은 d94-query PostgreSQL에 보관됩니다.
+배포 후 `/actuator/health`의 `status`가 `UP`인지 확인합니다. 이전 버전으로 되돌리려면 `.env`의 `IMAGE_TAG`를 이전 semver 또는 `sha-...`로 변경하고 `pull`, `up -d`를 다시 실행합니다. ECC 재시작 시 메모리의 티켓 상태는 초기화됩니다.
 
 ## 6. API 확인
 
@@ -120,6 +118,6 @@ curl -H "X-ECC-Token: <ECC_API_TOKEN>" \
 
 - 현재 승인 잠금은 ECC 복제본 간 분산 실행 lease가 아닙니다. **ECC는 한 인스턴스만 실행하세요.**
 - REST API에는 사용자 계정 체계가 없습니다. 토큰을 안전하게 보관하고 API 포트를 loopback 또는 신뢰된 네트워크에 바인딩하세요.
-- 작업 프롬프트와 CLI 결과는 민감할 수 있습니다. d94-query PostgreSQL과 CLI 인증 디렉터리를 보호하세요.
+- 작업 프롬프트와 CLI 결과는 민감할 수 있습니다. CLI 인증 디렉터리를 보호하세요.
 - Config Server 설정 로드는 아직 구현되지 않았으며 `.env` 환경 변수로 설정합니다.
 - ECC는 티켓 상태 저장용 Redis를 사용하지 않습니다. 기존 인프라 Redis가 필요하면 그 Redis를 사용하는 서비스의 설정을 따릅니다.

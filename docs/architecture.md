@@ -7,7 +7,7 @@
 ```text
 Telegram ──long polling──▶ ECC FastAPI 서비스 ──▶ Jetson Nano (선택)
                                   │
-                                  ├── d94-query API ──▶ PostgreSQL: 티켓·승인 상태
+                                  ├── 프로세스 메모리: 임시 티켓·승인 상태
                                   ├── Eureka: 선택 등록
                                   └── 단일 asyncio 큐 ──▶ AI CLI ──▶ 허용된 작업공간
 ```
@@ -16,7 +16,7 @@ Telegram ──long polling──▶ ECC FastAPI 서비스 ──▶ Jetson Nano
 |---|---|
 | `ecc/api` | FastAPI 수명주기, REST 인증·요청·응답, health |
 | `ecc/telegram` | Telegram 명령·버튼, 사용자 allowlist, 결과 알림 |
-| `ecc/tickets` | Pydantic 데이터 형식과 d94-query 티켓 API client |
+| `ecc/tickets` | Pydantic 데이터 형식과 임시 메모리 저장소 |
 | `ecc/intent` | Jetson Nano 분류 요청과 응답 검증, 미설정 시 기본 계획 |
 | `ecc/execution` | 작업공간 경계 확인, 직렬 CLI 실행, timeout |
 | `ecc/config` | `ECC_` 환경 변수 파싱 |
@@ -28,8 +28,8 @@ Telegram ──long polling──▶ ECC FastAPI 서비스 ──▶ Jetson Nano
 3. workspace 경로를 정규화하고 `ECC_CLI_WORKSPACES` 경계 안인지 확인합니다.
 4. `ECC_NANO_ENDPOINT`가 설정되면 `POST /api/v1/classify`에 `{ticket_id, raw_prompt}`를 전달합니다. 설정하지 않으면 기본 요약/계획을 만듭니다.
 5. Nano 응답을 `IntentPlan`으로 검증하고 `target_cli`가 허용 목록에 있는지 확인합니다.
-6. 티켓을 d94-query PostgreSQL에 `AWAITING_CONFIRM`으로 저장하고 Telegram 승인·거절 버튼을 전송합니다.
-7. 허용 사용자 callback은 d94-query에 상태 전이를 요청합니다. query는 현재 상태가 `AWAITING_CONFIRM`인 행에만 조건부 갱신을 적용합니다. 거절은 `REJECTED`, 승인은 `PROCESSING`으로 변경합니다.
+6. 티켓을 ECC 프로세스 메모리에 `AWAITING_CONFIRM`으로 저장하고 Telegram 승인·거절 버튼을 전송합니다.
+7. 허용 사용자 callback은 메모리 저장소의 잠금 안에서 상태를 변경합니다. 거절은 `REJECTED`, 승인은 `PROCESSING`으로 변경합니다.
 8. 승인은 `PROCESSING` 상태로 저장한 후 단일 asyncio queue에 넣습니다. CLI 결과에 따라 `DONE` 또는 `FAILED`로 저장하고 Telegram에 결과를 보냅니다.
 
 ## 3. REST API와 health
@@ -42,7 +42,7 @@ Telegram ──long polling──▶ ECC FastAPI 서비스 ──▶ Jetson Nano
 
 FastAPI 상세 `/docs`는 현재 별도로 비활성화하지 않았습니다. API 포트는 Compose에서 기본 loopback에만 바인딩합니다.
 
-## 4. 티켓 상태와 저장
+## 4. 티켓 상태와 임시 저장
 
 ```text
 CREATED → AWAITING_CONFIRM → PROCESSING → DONE
@@ -50,7 +50,7 @@ CREATED → AWAITING_CONFIRM → PROCESSING → DONE
                    └───────────────→ REJECTED
 ```
 
-d94-query는 `SN_ECC_TICKET` 테이블에 프롬프트, workspace, 계획, 상태, 결과, 승인 사용자 ID를 저장합니다. ECC에는 티켓 복제본을 저장하지 않습니다. 승인 callback의 조건부 SQL update가 동시 중복 승인을 막습니다.
+현재 티켓은 ECC 프로세스 메모리에만 존재하며 재시작하면 사라집니다. asyncio lock으로 한 인스턴스 안에서만 중복 승인·거절을 방지합니다. ECC는 하나의 인스턴스로 실행해야 합니다. d94-query가 티켓 API를 제공하면 저장소를 해당 API로 갱신할 예정이며, 현재 d94-query에는 ECC 티켓 테이블이나 API를 추가하지 않습니다.
 
 ## 5. 보안 경계
 
@@ -68,8 +68,6 @@ d94-query는 `SN_ECC_TICKET` 테이블에 프롬프트, workspace, 계획, 상�
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `ECC_SERVICE_NAME` | `d94-ecc` | 서비스 이름 |
-| `ECC_QUERY_BASE_URL` | `http://d94-query:8080/tsh` | d94-query context path를 포함한 base URL |
-| `ECC_QUERY_SERVICE_TOKEN` | 빈 값 | query API 서비스 인증. 필수 |
 | `ECC_API_TOKEN` | 빈 값 | REST 인증 토큰. 비어 있으면 REST 보호 경로는 모두 401 |
 | `ECC_TELEGRAM_BOT_TOKEN` | 빈 값 | 필수 Telegram bot token |
 | `ECC_TELEGRAM_ALLOWED_USER_IDS` | 빈 값 | 필수 쉼표 구분 사용자 ID |

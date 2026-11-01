@@ -8,7 +8,7 @@ from ecc.execution.runner import CliExecutor
 from ecc.intent.classifier import classify
 from ecc.telegram.bot import run_bot
 from ecc.tickets.models import CreateTicket, Ticket, TicketStatus
-from ecc.tickets.query_client import D94QueryClient
+from ecc.tickets.store import InMemoryTicketStore
 
 settings = get_settings()
 
@@ -17,11 +17,9 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     if not settings.telegram_bot_token or not settings.allowed_user_ids:
         raise RuntimeError("ECC_TELEGRAM_BOT_TOKEN and ECC_TELEGRAM_ALLOWED_USER_IDS are required")
-    if not settings.query_base_url or not settings.query_service_token:
-        raise RuntimeError("ECC_QUERY_BASE_URL and ECC_QUERY_SERVICE_TOKEN are required")
     executor = CliExecutor(settings)
     await executor.start()
-    app.state.query_client = D94QueryClient(settings)
+    app.state.ticket_store = InMemoryTicketStore()
     app.state.executor = executor
     bot_task = None
     eureka_client = None
@@ -86,19 +84,19 @@ async def create_ticket(body: CreateTicket, request: Request, _auth: None = Depe
         ticket.result = "Intent classification failed"
 
     try:
-        ticket = await request.app.state.query_client.create(ticket)
+        ticket = await request.app.state.ticket_store.create(ticket)
         if ticket.status == TicketStatus.AWAITING_CONFIRM:
             from ecc.telegram.bot import notify_approval
 
             await notify_approval(ticket)
         return ticket
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="d94-query ticket operation failed") from exc
+        raise HTTPException(status_code=500, detail="Ticket could not be processed") from exc
 
 
 @app.get("/api/v1/tickets/{ticket_id}", response_model=Ticket)
 async def get_ticket(ticket_id: str, request: Request, _auth: None = Depends(require_api_token)):
-    ticket = await request.app.state.query_client.get(ticket_id)
+    ticket = await request.app.state.ticket_store.get(ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return ticket

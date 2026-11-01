@@ -16,7 +16,7 @@
 - L4 `docs/features/`에 Telegram 승인, REST API, Nano 분류, CLI 실행, 런타임·인프라 계약을 작성했습니다.
 - README와 GHCR·Compose 배포 설명을 한국어로 바꿨습니다.
 - 기본 Compose는 Eureka 네트워크에 의존하지 않도록 구성하고, 필요할 때 `docker-compose.cloud.yml` overlay를 추가하도록 했습니다.
-- ECC의 Redis 의존성, Redis 기반 티켓 저장소·승인 잠금, Redis 컨테이너 설정을 제거했습니다. 티켓·승인·실행 결과의 유일한 저장소를 d94-query PostgreSQL로 두고, query service API와 V310 테이블을 추가했습니다.
+- ECC의 Redis 의존성과 Redis 컨테이너 설정을 제거했습니다. 요구사항에 따라 d94-query 티켓 API가 제공될 때까지 티켓 상태는 단일 ECC 프로세스 메모리에 임시 저장합니다. ECC 재시작 시 상태가 사라집니다.
 
 ## 검증
 
@@ -24,7 +24,7 @@
 - Markdown 상대 링크 대상 검사: 통과.
 - `docker compose --env-file .env config --quiet`: 통과 (`.env.example`을 임시 `.env`로 복사해 검증한 뒤 임시 파일 삭제).
 - 단위 테스트와 실제 컨테이너 기동은 수행하지 않았습니다.
-- d94-app-ecc와 d94-query는 별도 저장소이므로 배포 때 d94-query V310 지원 이미지를 먼저 올리고 ECC를 갱신해야 합니다.
+- d94-query에 ECC 전용 테이블이나 API는 추가하지 않았습니다. 해당 API가 제공되면 ECC를 별도로 갱신해야 합니다.
 
 ## 갱신 문서
 

@@ -9,8 +9,6 @@ class Settings(BaseSettings):
 
     service_name: str = "d94-ecc"
     api_token: str = ""
-    query_base_url: str = "http://d94-query:8080/tsh"
-    query_service_token: str = ""
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
     nano_endpoint: str = ""
