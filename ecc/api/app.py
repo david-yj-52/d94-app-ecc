@@ -3,14 +3,12 @@ import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from redis.asyncio import Redis
-
-from ecc.classifier import classify
-from ecc.config import get_settings
-from ecc.executor import CliExecutor
-from ecc.models import CreateTicket, Ticket, TicketStatus
-from ecc.store import TicketStore
-from ecc.telegram_bot import run_bot
+from ecc.config.settings import get_settings
+from ecc.execution.runner import CliExecutor
+from ecc.intent.classifier import classify
+from ecc.telegram.bot import run_bot
+from ecc.tickets.models import CreateTicket, Ticket, TicketStatus
+from ecc.tickets.query_client import D94QueryClient
 
 settings = get_settings()
 
@@ -19,11 +17,11 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     if not settings.telegram_bot_token or not settings.allowed_user_ids:
         raise RuntimeError("ECC_TELEGRAM_BOT_TOKEN and ECC_TELEGRAM_ALLOWED_USER_IDS are required")
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    if not settings.query_base_url or not settings.query_service_token:
+        raise RuntimeError("ECC_QUERY_BASE_URL and ECC_QUERY_SERVICE_TOKEN are required")
     executor = CliExecutor(settings)
     await executor.start()
-    app.state.redis = redis
-    app.state.store = TicketStore(redis, settings)
+    app.state.query_client = D94QueryClient(settings)
     app.state.executor = executor
     bot_task = None
     eureka_client = None
@@ -52,7 +50,6 @@ async def lifespan(app: FastAPI):
                 pass
         if eureka_client:
             eureka_client.stop()
-        await redis.aclose()
 
 
 app = FastAPI(title="D94 External Communication Channel", version="0.1.0", lifespan=lifespan)
@@ -65,10 +62,6 @@ async def require_api_token(x_ecc_token: str = Header(default="")):
 
 @app.get("/actuator/health")
 async def health(request: Request):
-    try:
-        await request.app.state.redis.ping()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Redis unavailable") from exc
     return {"status": "UP", "service": settings.service_name}
 
 
@@ -76,30 +69,36 @@ async def health(request: Request):
 async def create_ticket(body: CreateTicket, request: Request, _auth: None = Depends(require_api_token)):
     try:
         request.app.state.executor.resolve_workspace(body.workspace)
-        ticket = Ticket(prompt=body.prompt, workspace=body.workspace)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    ticket = Ticket(prompt=body.prompt, workspace=body.workspace)
+    try:
         plan = await classify(ticket.ticket_id, ticket.prompt, settings)
-        if plan.target_cli.lower() not in settings.allowed_clis:
-            plan.target_cli = "claude" if "claude" in settings.allowed_clis else sorted(settings.allowed_clis)[0]
         ticket.intent = plan.intent
         ticket.target_cli = plan.target_cli.lower()
         ticket.summary = plan.summary
         ticket.action_plan = plan.action_plan
         ticket.status = TicketStatus.AWAITING_CONFIRM
-        await request.app.state.store.save(ticket)
-        if settings.telegram_bot_token:
-            from ecc.telegram_bot import notify_approval
+    except Exception:
+        ticket.status = TicketStatus.FAILED
+        ticket.summary = "요청 분류에 실패했습니다."
+        ticket.result = "Intent classification failed"
+
+    try:
+        ticket = await request.app.state.query_client.create(ticket)
+        if ticket.status == TicketStatus.AWAITING_CONFIRM:
+            from ecc.telegram.bot import notify_approval
 
             await notify_approval(ticket)
         return ticket
-    except (ValueError, IndexError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="Intent classifier unavailable") from exc
+        raise HTTPException(status_code=502, detail="d94-query ticket operation failed") from exc
 
 
 @app.get("/api/v1/tickets/{ticket_id}", response_model=Ticket)
 async def get_ticket(ticket_id: str, request: Request, _auth: None = Depends(require_api_token)):
-    ticket = await request.app.state.store.get(ticket_id)
+    ticket = await request.app.state.query_client.get(ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return ticket

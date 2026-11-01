@@ -2,9 +2,9 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from ecc.classifier import classify
-from ecc.config import get_settings
-from ecc.models import Ticket, TicketStatus
+from ecc.config.settings import get_settings
+from ecc.intent.classifier import classify
+from ecc.tickets.models import Ticket, TicketStatus
 
 settings = get_settings()
 
@@ -27,7 +27,7 @@ async def notify_approval(ticket) -> None:
     plan_text = "\n".join(f"{i}. {item}" for i, item in enumerate(ticket.action_plan, 1))
     try:
         await bot.send_message(
-            next(iter(settings.allowed_user_ids)),
+            min(settings.allowed_user_ids),
             f"[작업 승인 요청]\n티켓: {ticket.ticket_id}\n의도: {ticket.intent}\nCLI: {ticket.target_cli}\n"
             f"요약: {ticket.summary}\n\n[계획]\n{plan_text}\n\n승인 후 CLI가 실행됩니다.",
             reply_markup=_approval_keyboard(ticket.ticket_id),
@@ -57,22 +57,21 @@ async def run_bot(app) -> None:
             app.state.executor.resolve_workspace(settings.telegram_default_workspace)
         except (OSError, ValueError) as exc:
             return await message.answer(f"작업공간 설정 오류: {exc}")
-        ticket = await app.state.store.save(Ticket(
+        ticket = Ticket(
             prompt=prompt, workspace=settings.telegram_default_workspace
-        ))
+        )
         try:
             plan = await classify(ticket.ticket_id, ticket.prompt, settings)
-            if plan.target_cli.lower() not in settings.allowed_clis:
-                raise ValueError("Classifier selected a CLI that is not allowlisted")
             ticket.intent, ticket.target_cli = plan.intent, plan.target_cli.lower()
             ticket.summary, ticket.action_plan = plan.summary, plan.action_plan
             ticket.status = TicketStatus.AWAITING_CONFIRM
-            await app.state.store.save(ticket)
-        except Exception as exc:
+        except Exception:
             ticket.status = TicketStatus.FAILED
             ticket.result = "Intent classification failed"
-            await app.state.store.save(ticket)
+            ticket.summary = "요청 분류에 실패했습니다."
+            ticket = await app.state.query_client.create(ticket)
             return await message.answer(f"분류 실패: {ticket.ticket_id}")
+        ticket = await app.state.query_client.create(ticket)
         await message.answer(
             f"[작업 승인 요청]\n티켓: {ticket.ticket_id}\n의도: {ticket.intent}\nCLI: {ticket.target_cli}\n"
             f"요약: {ticket.summary}\n\n[계획]\n" + "\n".join(
@@ -86,31 +85,23 @@ async def run_bot(app) -> None:
         if not query.from_user or not _authorized(query.from_user.id):
             return await query.answer("허용되지 않은 사용자입니다.", show_alert=True)
         action, ticket_id = (query.data or "").split(":", 1)
-        ticket = await app.state.store.get(ticket_id)
-        if not ticket or ticket.status != TicketStatus.AWAITING_CONFIRM:
-            return await query.answer("이미 처리되었거나 만료된 티켓입니다.", show_alert=True)
-        # Redis SET NX ensures two rapid approval callbacks cannot launch duplicate work.
-        claimed = await app.state.redis.set(f"ecc:approval:{ticket_id}", str(query.from_user.id), nx=True, ex=86400)
-        if not claimed:
-            return await query.answer("이미 처리 중인 티켓입니다.", show_alert=True)
+        try:
+            ticket = await app.state.query_client.decide(ticket_id, action, query.from_user.id)
+        except Exception:
+            return await query.answer("이미 처리되었거나 query 서버에 연결할 수 없습니다.", show_alert=True)
         if action == "reject":
-            ticket.status = TicketStatus.REJECTED
-            await app.state.store.save(ticket)
             if query.message:
                 await query.message.edit_text(f"티켓 {ticket_id} 거절됨")
             return await query.answer("거절했습니다.")
-        ticket.status = TicketStatus.PROCESSING
-        await app.state.store.save(ticket)
         if query.message:
             await query.message.edit_text(f"티켓 {ticket_id} 실행 중…")
         await query.answer("승인했습니다.")
         try:
             result = await app.state.executor.execute(ticket.target_cli, ticket.workspace, ticket.prompt)
-            ticket.status, ticket.result = TicketStatus.DONE, result
+            ticket = await app.state.query_client.finish(ticket_id, TicketStatus.DONE, result)
         except Exception as exc:
-            ticket.status, ticket.result = TicketStatus.FAILED, str(exc)[:12000]
-        await app.state.store.save(ticket)
-        await bot.send_message(query.from_user.id, f"[{ticket.status}] {ticket_id}\n\n{ticket.result[-3500:]}")
+            ticket = await app.state.query_client.finish(ticket_id, TicketStatus.FAILED, str(exc)[:12000])
+        await bot.send_message(query.from_user.id, f"[{ticket.status}] {ticket_id}\n\n{(ticket.result or '')[-3500:]}")
 
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())

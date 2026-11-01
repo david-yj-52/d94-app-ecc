@@ -2,7 +2,7 @@ import asyncio
 import os
 from pathlib import Path
 
-from ecc.config import Settings
+from ecc.config.settings import Settings
 
 
 class CliExecutor:

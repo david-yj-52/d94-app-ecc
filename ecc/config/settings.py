@@ -8,11 +8,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="ECC_", extra="ignore")
 
     service_name: str = "d94-ecc"
-    app_env: str = "local"
-    bind_host: str = "0.0.0.0"
-    port: int = 8080
-    redis_url: str = "redis://redis:6379/0"
     api_token: str = ""
+    query_base_url: str = "http://d94-query:8080/tsh"
+    query_service_token: str = ""
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
     nano_endpoint: str = ""
@@ -26,7 +24,6 @@ class Settings(BaseSettings):
     cli_timeout_seconds: int = 1800
     cli_workspaces: str = Field(default="/workspace")
     cli_executables: str = ""
-    ticket_ttl_seconds: int = 604800
     telegram_default_workspace: str = "/workspace"
 
     @property

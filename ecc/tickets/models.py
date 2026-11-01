@@ -20,7 +20,7 @@ class CreateTicket(BaseModel):
 
 
 class IntentPlan(BaseModel):
-    intent: str = "code_generation"
+    intent: str | None = "code_generation"
     target_cli: str = "claude"
     summary: str
     action_plan: list[str] = Field(default_factory=list)
@@ -33,8 +33,9 @@ class Ticket(BaseModel):
     status: TicketStatus = TicketStatus.CREATED
     intent: str = "code_generation"
     target_cli: str = "claude"
-    summary: str = ""
+    summary: str | None = ""
     action_plan: list[str] = Field(default_factory=list)
-    result: str = ""
+    result: str | None = None
+    approved_by: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
