@@ -92,3 +92,13 @@ async def test_ayaan_client_sends_token_and_unwraps():
     c = AyaanClient(s, transport=httpx.MockTransport(handler))
     assert await c.create_task({"prompt": "p"}) == (409, {"id": "old"})
     assert seen == {"tok": "tk", "path": "/ayaan/tasks"}
+
+
+async def test_callback_answers_when_ayaan_down():
+    class Down(FakeAyaan):
+        async def resume(self, id):
+            raise httpx.ConnectError("down")
+
+    q = FakeQuery("ayn:resume:abc")
+    await tg.handle_callback(q, Down())
+    assert q.answers == ["ayaan 연결 실패"]

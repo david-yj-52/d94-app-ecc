@@ -1,7 +1,9 @@
+import functools
 import re
 import time
 import uuid
 
+import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -14,6 +16,19 @@ _KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*-\d+$")
 _PROMPT_TTL = 600
 # ponytail: in-memory, single instance; prompts are lost on restart (callback then says expired)
 _prompts: dict[str, tuple[str, float]] = {}
+
+
+def guard_ayaan(fn):
+    """Reply (message) or answer (callback) when ayaan is unreachable, so nothing hangs."""
+
+    @functools.wraps(fn)
+    async def wrapper(event, *args, **kwargs):
+        try:
+            return await fn(event, *args, **kwargs)
+        except httpx.HTTPError:
+            await event.answer("ayaan 연결 실패")
+
+    return wrapper
 
 
 def _authorized(user_id: int) -> bool:
@@ -66,6 +81,7 @@ def _task_line(t: dict) -> str:
     return f"{t.get('id')} {t.get('issueKey') or '-'} {t.get('toolCd')} {t.get('status')}{extra}"
 
 
+@guard_ayaan
 async def handle_callback(query: CallbackQuery, ayaan) -> None:
     if not query.from_user or not _authorized(query.from_user.id):
         return await query.answer("허용되지 않은 사용자입니다.", show_alert=True)
@@ -120,6 +136,7 @@ def build_dispatcher(ayaan) -> Dispatcher:
         )
 
     @dp.message(Command("run"))
+    @guard_ayaan
     async def run(message: Message):
         if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
@@ -138,6 +155,7 @@ def build_dispatcher(ayaan) -> Dispatcher:
         )
 
     @dp.message(Command("task"))
+    @guard_ayaan
     async def task(message: Message):
         if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
@@ -150,6 +168,7 @@ def build_dispatcher(ayaan) -> Dispatcher:
         )
 
     @dp.message(Command("tasks"))
+    @guard_ayaan
     async def tasks(message: Message):
         if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
@@ -157,18 +176,21 @@ def build_dispatcher(ayaan) -> Dispatcher:
         await message.answer("\n".join(_task_line(t) for t in items) or "작업이 없습니다.")
 
     @dp.message(Command("quota"))
+    @guard_ayaan
     async def quota(message: Message):
         if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
         d = await ayaan.quotas()
         lines = [
-            f"{q['toolCd']} {q['windowCd']} {q['usedPct']}% reset={q.get('resetsAt')} {q['status']}"
+            f"{q.get('toolCd')} {q.get('windowCd')} {q.get('usedPct')}% "
+            f"reset={q.get('resetsAt')} {q.get('status')}"
             for q in d.get("quotas", [])
         ] + [f"! {w}" for w in d.get("warnings", [])]
         await message.answer("\n".join(lines) or "쿼터 정보가 없습니다.")
 
     for name in ("resume", "cancel"):
         @dp.message(Command(name))
+        @guard_ayaan
         async def act(message: Message, _n=name):
             if deny(message):
                 return await message.answer("허용되지 않은 사용자입니다.")

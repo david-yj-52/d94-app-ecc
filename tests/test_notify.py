@@ -41,3 +41,9 @@ def test_notify_sends_to_all_allowed_users(monkeypatch):
     assert sorted(c[0] for c in bot.calls) == [1, 2]
     assert bot.calls[0][1] == "[RATE_LIMITED] CIRA-12 paused\n\nresume at 15:00"
     assert bot.calls[0][2].inline_keyboard[0][0].callback_data == "ayn:resume:abc"
+
+
+def test_notify_non_ascii_token_is_401(monkeypatch):
+    client, _ = _client(monkeypatch)
+    r = client.post("/api/v1/notify", json=BODY, headers={"X-ECC-Token": "토큰".encode()})
+    assert r.status_code == 401

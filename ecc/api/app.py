@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -12,6 +13,7 @@ from ecc.config.settings import get_settings
 from ecc.telegram.bot import notify_keyboard, render_notify, run_bot
 
 settings = get_settings()
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -22,6 +24,11 @@ async def lifespan(app: FastAPI):
     ayaan = AyaanClient(settings)
     app.state.bot = bot
     bot_task = asyncio.create_task(run_bot(bot, ayaan), name="ecc-telegram-bot")
+    bot_task.add_done_callback(
+        lambda t: not t.cancelled()
+        and t.exception()
+        and log.error("telegram polling died", exc_info=t.exception())
+    )
     eureka_client = None
     if settings.eureka_enabled:
         from py_eureka_client import eureka_client as eureka
@@ -52,7 +59,8 @@ app = FastAPI(title="D94 External Communication Channel", version="0.2.0", lifes
 
 
 async def require_api_token(x_ecc_token: str = Header(default="")):
-    if not settings.api_token or not secrets.compare_digest(x_ecc_token, settings.api_token):
+    expected = settings.api_token.encode()
+    if not expected or not secrets.compare_digest(x_ecc_token.encode(), expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -84,5 +92,6 @@ async def notify(body: NotifyBody, request: Request, _auth: None = Depends(requi
             await request.app.state.bot.send_message(uid, text, reply_markup=markup)
             sent += 1
         except Exception:
-            pass  # one blocked user must not stop the rest; caller sees the count
+            # one blocked user must not stop the rest; caller sees the count
+            log.warning("notify send failed for user %s", uid, exc_info=True)
     return {"sent": sent}
