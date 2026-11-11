@@ -1,114 +1,191 @@
+import re
+import time
+import uuid
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ecc.config.settings import get_settings
-from ecc.intent.classifier import classify
-from ecc.tickets.models import Ticket, TicketStatus
 
 settings = get_settings()
+
+_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*-\d+$")
+_PROMPT_TTL = 600
+# ponytail: in-memory, single instance; prompts are lost on restart (callback then says expired)
+_prompts: dict[str, tuple[str, float]] = {}
 
 
 def _authorized(user_id: int) -> bool:
     return user_id in settings.allowed_user_ids
 
 
-def _approval_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
+def parse_run(text: str) -> tuple[str, str | None]:
+    parts = (text or "").split()[1:]
+    if not 1 <= len(parts) <= 2 or not _KEY.match(parts[0]):
+        raise ValueError("사용법: /run <이슈키> [tool]")
+    return parts[0], parts[1].upper() if len(parts) == 2 else None
+
+
+def store_prompt(prompt: str) -> str:
+    now = time.monotonic()
+    for k in [k for k, (_, exp) in _prompts.items() if exp < now]:
+        del _prompts[k]
+    key = f"ayn:task:{uuid.uuid4().hex[:8]}"
+    _prompts[key] = (prompt, now + _PROMPT_TTL)
+    return key
+
+
+def take_prompt(key: str) -> str | None:
+    item = _prompts.pop(key, None)
+    return item[0] if item and item[1] >= time.monotonic() else None
+
+
+def render_notify(event: str, title: str, body: str) -> str:
+    return f"[{event}] {title}\n\n{body}"
+
+
+def notify_keyboard(buttons) -> InlineKeyboardMarkup | None:
+    if not buttons:
+        return None
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ 승인", callback_data=f"approve:{ticket_id}"),
-        InlineKeyboardButton(text="❌ 거절", callback_data=f"reject:{ticket_id}"),
+        InlineKeyboardButton(text=b["label"], callback_data=f"ayn:{b['action']}:{b['taskId']}")
+        for b in buttons
     ]])
 
 
-async def notify_approval(ticket) -> None:
-    if not settings.telegram_bot_token or not settings.allowed_user_ids:
-        return
-    bot = Bot(settings.telegram_bot_token)
-    plan_text = "\n".join(f"{i}. {item}" for i, item in enumerate(ticket.action_plan, 1))
-    try:
-        await bot.send_message(
-            min(settings.allowed_user_ids),
-            f"[작업 승인 요청]\n티켓: {ticket.ticket_id}\n의도: {ticket.intent}\nCLI: {ticket.target_cli}\n"
-            f"요약: {ticket.summary}\n\n[계획]\n{plan_text}\n\n승인 후 CLI가 실행됩니다.",
-            reply_markup=_approval_keyboard(ticket.ticket_id),
-        )
-    finally:
-        await bot.session.close()
+def confirm_keyboard(run_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="실행", callback_data=run_data),
+        InlineKeyboardButton(text="취소", callback_data="ayn:no"),
+    ]])
 
 
-async def run_bot(app) -> None:
-    bot = Bot(settings.telegram_bot_token)
-    dispatcher = Dispatcher()
+def _task_line(t: dict) -> str:
+    extra = f" resumeAt={t['resumeAt']}" if t.get("resumeAt") else ""
+    return f"{t.get('id')} {t.get('issueKey') or '-'} {t.get('toolCd')} {t.get('status')}{extra}"
 
-    @dispatcher.message(CommandStart())
+
+async def handle_callback(query: CallbackQuery, ayaan) -> None:
+    if not query.from_user or not _authorized(query.from_user.id):
+        return await query.answer("허용되지 않은 사용자입니다.", show_alert=True)
+    data = query.data or ""
+    parts = data.split(":")
+    if data == "ayn:no":
+        text = "취소했습니다."
+    elif parts[:2] == ["ayn", "run"] and len(parts) == 4:
+        body = {"issueKey": parts[2], "source": "TELEGRAM"}
+        if parts[3] and parts[3] != "-":
+            body["tool"] = parts[3]
+        status, task = await ayaan.create_task(body)
+        text = _created_text(status, task)
+    elif parts[:2] == ["ayn", "task"] and len(parts) == 3:
+        prompt = take_prompt(data)
+        if prompt is None:
+            text = "요청이 만료되었습니다. /task를 다시 보내세요."
+        else:
+            text = _created_text(*await ayaan.create_task({"prompt": prompt, "source": "TELEGRAM"}))
+    elif parts[:2] in (["ayn", "resume"], ["ayn", "cancel"]) and len(parts) == 3:
+        call = ayaan.resume if parts[1] == "resume" else ayaan.cancel
+        status, _ = await call(parts[2])
+        text = f"{parts[1]} 요청 완료" if status < 300 else f"{parts[1]} 실패 ({status})"
+    else:
+        return await query.answer("알 수 없는 동작입니다.")
+    await query.answer()
+    if query.message:
+        await query.message.edit_text(text)
+
+
+def _created_text(status: int, task) -> str:
+    task = task if isinstance(task, dict) else {}
+    if status == 201:
+        return f"작업 생성됨: {task.get('id')} ({task.get('issueKey') or 'prompt'})"
+    if status == 409:
+        return f"이미 진행 중인 작업이 있습니다: {task.get('id')} ({task.get('status')})"
+    return f"작업 생성 실패 ({status})"
+
+
+def build_dispatcher(ayaan) -> Dispatcher:
+    dp = Dispatcher()
+
+    def deny(message: Message) -> bool:
+        return not message.from_user or not _authorized(message.from_user.id)
+
+    @dp.message(CommandStart())
     async def start(message: Message):
-        if not message.from_user or not _authorized(message.from_user.id):
+        if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
-        await message.answer("ECC 작업 요청: /task <요청 내용>")
+        await message.answer(
+            "/run <이슈키> [tool]\n/task <프롬프트>\n/tasks\n/quota\n/resume <id>\n/cancel <id>"
+        )
 
-    @dispatcher.message(Command("task"))
+    @dp.message(Command("run"))
+    async def run(message: Message):
+        if deny(message):
+            return await message.answer("허용되지 않은 사용자입니다.")
+        try:
+            key, tool = parse_run(message.text or "")
+        except ValueError as exc:
+            return await message.answer(str(exc))
+        issue = await ayaan.issue_preview(key)
+        if issue is None:
+            return await message.answer(f"이슈를 찾을 수 없습니다: {key}")
+        tool = tool or issue.get("defaultTool") or "-"
+        await message.answer(
+            f"{key} {issue.get('title')}\n프로젝트: {issue.get('projectKey')}\n"
+            f"경로: {issue.get('workspacePath')}\n도구: {tool}",
+            reply_markup=confirm_keyboard(f"ayn:run:{key}:{tool}"),
+        )
+
+    @dp.message(Command("task"))
     async def task(message: Message):
-        if not message.from_user or not _authorized(message.from_user.id):
+        if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
         prompt = (message.text or "").partition(" ")[2].strip()
         if not prompt:
-            return await message.answer("사용법: /task <요청 내용>")
-        try:
-            app.state.executor.resolve_workspace(settings.telegram_default_workspace)
-        except (OSError, ValueError) as exc:
-            return await message.answer(f"작업공간 설정 오류: {exc}")
-        ticket = Ticket(
-            prompt=prompt, workspace=settings.telegram_default_workspace
-        )
-        try:
-            plan = await classify(ticket.ticket_id, ticket.prompt, settings)
-            ticket.intent, ticket.target_cli = plan.intent, plan.target_cli.lower()
-            ticket.summary, ticket.action_plan = plan.summary, plan.action_plan
-            ticket.status = TicketStatus.AWAITING_CONFIRM
-        except Exception:
-            ticket.status = TicketStatus.FAILED
-            ticket.result = "Intent classification failed"
-            ticket.summary = "요청 분류에 실패했습니다."
-            ticket = await app.state.ticket_store.create(ticket)
-            return await message.answer(f"분류 실패: {ticket.ticket_id}")
-        ticket = await app.state.ticket_store.create(ticket)
+            return await message.answer("사용법: /task <프롬프트>")
         await message.answer(
-            f"[작업 승인 요청]\n티켓: {ticket.ticket_id}\n의도: {ticket.intent}\nCLI: {ticket.target_cli}\n"
-            f"요약: {ticket.summary}\n\n[계획]\n" + "\n".join(
-                f"{i}. {item}" for i, item in enumerate(ticket.action_plan, 1)
-            ) + "\n\n승인 후 CLI가 실행됩니다.",
-            reply_markup=_approval_keyboard(ticket.ticket_id),
+            f"다음 프롬프트로 작업을 실행할까요?\n\n{prompt[:1000]}",
+            reply_markup=confirm_keyboard(store_prompt(prompt)),
         )
 
-    @dispatcher.callback_query(F.data.startswith(("approve:", "reject:")))
-    async def decide(query: CallbackQuery):
-        if not query.from_user or not _authorized(query.from_user.id):
-            return await query.answer("허용되지 않은 사용자입니다.", show_alert=True)
-        action, ticket_id = (query.data or "").split(":", 1)
-        try:
-            ticket = await app.state.ticket_store.decide(ticket_id, action, query.from_user.id)
-            if ticket is None:
-                return await query.answer("이미 처리되었거나 티켓을 찾을 수 없습니다.", show_alert=True)
-        except Exception:
-            return await query.answer("티켓 상태를 변경할 수 없습니다.", show_alert=True)
-        if action == "reject":
-            if query.message:
-                await query.message.edit_text(f"티켓 {ticket_id} 거절됨")
-            return await query.answer("거절했습니다.")
-        if query.message:
-            await query.message.edit_text(f"티켓 {ticket_id} 실행 중…")
-        await query.answer("승인했습니다.")
-        try:
-            result = await app.state.executor.execute(ticket.target_cli, ticket.workspace, ticket.prompt)
-            ticket = await app.state.ticket_store.finish(ticket_id, TicketStatus.DONE, result)
-        except Exception as exc:
-            ticket = await app.state.ticket_store.finish(ticket_id, TicketStatus.FAILED, str(exc)[:12000])
-        if ticket is None:
-            return await bot.send_message(query.from_user.id, f"티켓 상태를 갱신할 수 없습니다: {ticket_id}")
-        await bot.send_message(query.from_user.id, f"[{ticket.status}] {ticket_id}\n\n{(ticket.result or '')[-3500:]}")
+    @dp.message(Command("tasks"))
+    async def tasks(message: Message):
+        if deny(message):
+            return await message.answer("허용되지 않은 사용자입니다.")
+        items = await ayaan.list_tasks()
+        await message.answer("\n".join(_task_line(t) for t in items) or "작업이 없습니다.")
 
-    try:
-        await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
-    finally:
-        await bot.session.close()
+    @dp.message(Command("quota"))
+    async def quota(message: Message):
+        if deny(message):
+            return await message.answer("허용되지 않은 사용자입니다.")
+        d = await ayaan.quotas()
+        lines = [
+            f"{q['toolCd']} {q['windowCd']} {q['usedPct']}% reset={q.get('resetsAt')} {q['status']}"
+            for q in d.get("quotas", [])
+        ] + [f"! {w}" for w in d.get("warnings", [])]
+        await message.answer("\n".join(lines) or "쿼터 정보가 없습니다.")
 
+    for name in ("resume", "cancel"):
+        @dp.message(Command(name))
+        async def act(message: Message, _n=name):
+            if deny(message):
+                return await message.answer("허용되지 않은 사용자입니다.")
+            tid = (message.text or "").partition(" ")[2].strip()
+            if not tid:
+                return await message.answer(f"사용법: /{_n} <id>")
+            call = ayaan.resume if _n == "resume" else ayaan.cancel
+            status, _ = await call(tid)
+            await message.answer(f"{_n} 완료" if status < 300 else f"{_n} 실패 ({status})")
+
+    @dp.callback_query(F.data.startswith("ayn:"))
+    async def cb(query: CallbackQuery):
+        await handle_callback(query, ayaan)
+
+    return dp
+
+
+async def run_bot(bot: Bot, ayaan) -> None:
+    dp = build_dispatcher(ayaan)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

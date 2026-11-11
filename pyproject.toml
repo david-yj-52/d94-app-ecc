@@ -1,7 +1,7 @@
 [project]
 name = "d94-app-ecc"
 version = "0.1.0"
-description = "외부 소통 채널 기반 AI 작업 오케스트레이션 서비스"
+description = "Telegram 전용 외부 소통 채널 (ayaan 연동)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "aiogram>=3.24,<4",
@@ -11,6 +11,9 @@ dependencies = [
   "py-eureka-client>=0.11,<1",
   "uvicorn[standard]>=0.34,<1",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -6,13 +6,13 @@ services:
     env_file: .env
     environment:
       ECC_EUREKA_INSTANCE_PORT: 8080
+      ECC_EUREKA_ENABLED: "true"
+      ECC_EUREKA_URL: http://eureka-cloud-eureka-1:8761/eureka/
+      ECC_EUREKA_INSTANCE_HOST: d94-ecc
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8085}:8080"
-    volumes:
-      - "${WORKSPACE_HOST_PATH:-./workspace}:/workspace"
-      - "${CLI_AUTH_HOST_PATH:-./cli-auth}:/home/ecc"
     networks:
-      - egress
+      - cloud
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/actuator/health', timeout=3)"]
       interval: 30s
@@ -21,6 +21,6 @@ services:
       start_period: 30s
 
 networks:
-  egress:
-    driver: bridge
-
+  cloud:
+    external: true
+    name: ${CLOUD_NETWORK_NAME:-befw-cloud-network}

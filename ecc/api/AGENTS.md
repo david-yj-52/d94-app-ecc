@@ -1,22 +1,8 @@
 # L2 — API 진입점
 
-> L1: 저장소 [AGENTS.md](../../AGENTS.md) · L3: [architecture](../../docs/architecture.md) · L4: [REST 티켓 API](../../docs/features/rest-api.md)
+> L1: [AGENTS.md](../../AGENTS.md) · L3: [architecture](../../docs/architecture.md)
 
-## 책임
+`app.py`: lifespan(Bot·AyaanClient·polling·Eureka), `GET /actuator/health`, `POST /api/v1/notify`.
 
-FastAPI 앱 수명주기, 임시 티켓 저장소·CLI worker·Telegram polling·Eureka 초기화, liveness health check와 REST 티켓 경로를 조립합니다. 요청 검증과 응답의 HTTP 상태는 이 모듈에서 관리합니다.
-
-## 파일과 계약
-
-| 파일 | 책임 |
-|---|---|
-| `app.py` | lifespan, `GET /actuator/health`, `POST /api/v1/tickets`, `GET /api/v1/tickets/{ticket_id}` |
-
-## 불변식
-
-- health 외 경로는 `X-ECC-Token`을 검증합니다.
-- 수명주기에서 worker·Telegram polling·Eureka를 시작했다면 종료 시 정리합니다.
-- 현재 티켓 상태는 임시 단일 프로세스 저장소에서 관리합니다. d94-query API가 준비되면 저장 경계를 해당 API로 교체합니다.
-- API 티켓은 Telegram 승인 요청까지 연결되어야 합니다. 승인 메시지를 보내지 못한 요청을 성공으로 가장하지 않습니다.
-- HTTP 계층은 CLI 프로세스를 직접 실행하지 않습니다. `execution` 모듈의 경계를 사용합니다.
-
+- notify는 `X-ECC-Token` 필수. `app.state.bot.send_message`로 allowlist 전원에게 발송, `{sent: n}`.
+- lifespan에서 시작한 polling·클라이언트는 종료 시 정리합니다.

@@ -1,14 +1,15 @@
 import asyncio
 import secrets
 from contextlib import asynccontextmanager
+from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from aiogram import Bot
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel
+
+from ecc.ayaan_client import AyaanClient
 from ecc.config.settings import get_settings
-from ecc.execution.runner import CliExecutor
-from ecc.intent.classifier import classify
-from ecc.telegram.bot import run_bot
-from ecc.tickets.models import CreateTicket, Ticket, TicketStatus
-from ecc.tickets.store import InMemoryTicketStore
+from ecc.telegram.bot import notify_keyboard, render_notify, run_bot
 
 settings = get_settings()
 
@@ -17,14 +18,11 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     if not settings.telegram_bot_token or not settings.allowed_user_ids:
         raise RuntimeError("ECC_TELEGRAM_BOT_TOKEN and ECC_TELEGRAM_ALLOWED_USER_IDS are required")
-    executor = CliExecutor(settings)
-    await executor.start()
-    app.state.ticket_store = InMemoryTicketStore()
-    app.state.executor = executor
-    bot_task = None
+    bot = Bot(settings.telegram_bot_token)
+    ayaan = AyaanClient(settings)
+    app.state.bot = bot
+    bot_task = asyncio.create_task(run_bot(bot, ayaan), name="ecc-telegram-bot")
     eureka_client = None
-    if settings.telegram_bot_token:
-        bot_task = asyncio.create_task(run_bot(app), name="ecc-telegram-bot")
     if settings.eureka_enabled:
         from py_eureka_client import eureka_client as eureka
 
@@ -39,18 +37,18 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await executor.stop()
-        if bot_task:
-            bot_task.cancel()
-            try:
-                await bot_task
-            except asyncio.CancelledError:
-                pass
+        bot_task.cancel()
+        try:
+            await bot_task
+        except asyncio.CancelledError:
+            pass
         if eureka_client:
             eureka_client.stop()
+        await ayaan.aclose()
+        await bot.session.close()
 
 
-app = FastAPI(title="D94 External Communication Channel", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="D94 External Communication Channel", version="0.2.0", lifespan=lifespan)
 
 
 async def require_api_token(x_ecc_token: str = Header(default="")):
@@ -58,46 +56,33 @@ async def require_api_token(x_ecc_token: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+class NotifyButton(BaseModel):
+    label: str
+    action: Literal["resume", "cancel"]
+    taskId: str
+
+
+class NotifyBody(BaseModel):
+    event: str
+    title: str
+    body: str
+    buttons: list[NotifyButton] | None = None
+
+
 @app.get("/actuator/health")
-async def health(request: Request):
+async def health():
     return {"status": "UP", "service": settings.service_name}
 
 
-@app.post("/api/v1/tickets", response_model=Ticket, status_code=status.HTTP_201_CREATED)
-async def create_ticket(body: CreateTicket, request: Request, _auth: None = Depends(require_api_token)):
-    try:
-        request.app.state.executor.resolve_workspace(body.workspace)
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    ticket = Ticket(prompt=body.prompt, workspace=body.workspace)
-    try:
-        plan = await classify(ticket.ticket_id, ticket.prompt, settings)
-        ticket.intent = plan.intent
-        ticket.target_cli = plan.target_cli.lower()
-        ticket.summary = plan.summary
-        ticket.action_plan = plan.action_plan
-        ticket.status = TicketStatus.AWAITING_CONFIRM
-    except Exception:
-        ticket.status = TicketStatus.FAILED
-        ticket.summary = "요청 분류에 실패했습니다."
-        ticket.result = "Intent classification failed"
-
-    try:
-        ticket = await request.app.state.ticket_store.create(ticket)
-        if ticket.status == TicketStatus.AWAITING_CONFIRM:
-            from ecc.telegram.bot import notify_approval
-
-            await notify_approval(ticket)
-        return ticket
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="Ticket could not be processed") from exc
-
-
-@app.get("/api/v1/tickets/{ticket_id}", response_model=Ticket)
-async def get_ticket(ticket_id: str, request: Request, _auth: None = Depends(require_api_token)):
-    ticket = await request.app.state.ticket_store.get(ticket_id)
-    if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-    return ticket
-
+@app.post("/api/v1/notify")
+async def notify(body: NotifyBody, request: Request, _auth: None = Depends(require_api_token)):
+    text = render_notify(body.event, body.title, body.body)
+    markup = notify_keyboard([b.model_dump() for b in body.buttons or []])
+    sent = 0
+    for uid in sorted(settings.allowed_user_ids):
+        try:
+            await request.app.state.bot.send_message(uid, text, reply_markup=markup)
+            sent += 1
+        except Exception:
+            pass  # one blocked user must not stop the rest; caller sees the count
+    return {"sent": sent}

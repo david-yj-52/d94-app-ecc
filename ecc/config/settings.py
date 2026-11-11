@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,32 +17,13 @@ class Settings(BaseSettings):
     eureka_instance_host: str = "d94-ecc"
     eureka_instance_port: int = 8080
     eureka_instance_ip: str = ""
-    cli_allowlist: str = "claude,gemini,codex"
-    cli_timeout_seconds: int = 1800
-    cli_workspaces: str = Field(default="/workspace")
-    cli_executables: str = ""
-    telegram_default_workspace: str = "/workspace"
+    ayaan_base_url: str = "http://gateway-cloud-gateway-1:10001/tsh/api/v1/ayaan"
+    ayaan_token: str = ""
 
     @property
     def allowed_user_ids(self) -> set[int]:
-        return {int(value.strip()) for value in self.telegram_allowed_user_ids.split(",") if value.strip()}
-
-    @property
-    def allowed_clis(self) -> set[str]:
-        return {value.strip().lower() for value in self.cli_allowlist.split(",") if value.strip()}
-
-    @property
-    def workspace_roots(self) -> tuple[str, ...]:
-        return tuple(value.strip() for value in self.cli_workspaces.split(",") if value.strip())
-
-    @property
-    def executable_map(self) -> dict[str, str]:
-        result = {}
-        for pair in self.cli_executables.split(","):
-            if "=" in pair:
-                key, value = pair.split("=", 1)
-                result[key.strip().lower()] = value.strip()
-        return result
+        ids = self.telegram_allowed_user_ids.split(",")
+        return {int(v.strip()) for v in ids if v.strip()}
 
 
 @lru_cache

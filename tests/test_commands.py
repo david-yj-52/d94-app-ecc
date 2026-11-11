@@ -1,0 +1,94 @@
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+from ecc.ayaan_client import AyaanClient
+from ecc.telegram import bot as tg
+
+
+class FakeAyaan:
+    def __init__(self):
+        self.calls = []
+
+    async def create_task(self, body):
+        self.calls.append(("create", body))
+        return 201, {"id": "t1", "issueKey": body.get("issueKey")}
+
+    async def resume(self, id):
+        self.calls.append(("resume", id))
+        return 200, {}
+
+    async def cancel(self, id):
+        self.calls.append(("cancel", id))
+        return 200, {}
+
+
+class FakeQuery:
+    def __init__(self, data, user_id=1):
+        self.data = data
+        self.from_user = SimpleNamespace(id=user_id)
+        self.answers = []
+        self.message = SimpleNamespace(edit_text=self._edit)
+        self.edits = []
+
+    async def _edit(self, text, **kw):
+        self.edits.append(text)
+
+    async def answer(self, text="", **kw):
+        self.answers.append(text)
+
+
+@pytest.fixture(autouse=True)
+def allowed(monkeypatch):
+    monkeypatch.setattr(tg.settings, "telegram_allowed_user_ids", "1")
+
+
+def test_parse_run_command():
+    assert tg.parse_run("/run CIRA-12 codex") == ("CIRA-12", "CODEX")
+    assert tg.parse_run("/run CIRA-12") == ("CIRA-12", None)
+    with pytest.raises(ValueError):
+        tg.parse_run("/run")
+    with pytest.raises(ValueError):
+        tg.parse_run("/run bad key")
+
+
+async def test_run_confirm_callback_creates_task():
+    ayaan, q = FakeAyaan(), FakeQuery("ayn:run:CIRA-12:CODEX")
+    await tg.handle_callback(q, ayaan)
+    body = {"issueKey": "CIRA-12", "tool": "CODEX", "source": "TELEGRAM"}
+    assert ayaan.calls == [("create", body)]
+
+
+async def test_task_callback_uses_stored_prompt():
+    key = tg.store_prompt("do the thing")
+    assert len(key.encode()) <= 64
+    ayaan, q = FakeAyaan(), FakeQuery(key)
+    await tg.handle_callback(q, ayaan)
+    assert ayaan.calls == [("create", {"prompt": "do the thing", "source": "TELEGRAM"})]
+
+
+async def test_resume_button_calls_ayaan():
+    ayaan, q = FakeAyaan(), FakeQuery("ayn:resume:abc")
+    await tg.handle_callback(q, ayaan)
+    assert ayaan.calls == [("resume", "abc")]
+
+
+async def test_unauthorized_user_ignored():
+    ayaan, q = FakeAyaan(), FakeQuery("ayn:resume:abc", user_id=99)
+    await tg.handle_callback(q, ayaan)
+    assert ayaan.calls == []
+
+
+async def test_ayaan_client_sends_token_and_unwraps():
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen["tok"] = req.headers["X-AYAAN-Token"]
+        seen["path"] = req.url.path
+        return httpx.Response(409, json={"success": False, "data": {"id": "old"}})
+
+    s = SimpleNamespace(ayaan_base_url="http://x/ayaan", ayaan_token="tk")
+    c = AyaanClient(s, transport=httpx.MockTransport(handler))
+    assert await c.create_task({"prompt": "p"}) == (409, {"id": "old"})
+    assert seen == {"tok": "tk", "path": "/ayaan/tasks"}
