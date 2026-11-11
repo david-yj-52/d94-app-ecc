@@ -47,3 +47,45 @@ def test_notify_non_ascii_token_is_401(monkeypatch):
     client, _ = _client(monkeypatch)
     r = client.post("/api/v1/notify", json=BODY, headers={"X-ECC-Token": "토큰".encode()})
     assert r.status_code == 401
+
+
+def test_notify_502_when_nobody_received(monkeypatch):
+    client, bot = _client(monkeypatch)
+
+    async def boom(*a, **k):
+        raise RuntimeError("blocked")
+
+    bot.send_message = boom
+    r = client.post("/api/v1/notify", json=BODY, headers={"X-ECC-Token": "t0ken"})
+    assert r.status_code == 502 and r.json() == {"sent": 0}
+
+
+def test_lifespan_eureka_uses_async_api(monkeypatch):
+    import asyncio
+
+    from py_eureka_client import eureka_client
+
+    calls = []
+
+    async def init_async(**kw):
+        calls.append("init")
+
+    async def stop_async():
+        calls.append("stop")
+
+    def sync(*a, **k):
+        raise AssertionError("sync eureka call inside the event loop")
+
+    async def idle_bot(bot, ayaan):
+        await asyncio.Event().wait()
+
+    for name, fn in (("init_async", init_async), ("stop_async", stop_async),
+                     ("init", sync), ("stop", sync)):
+        monkeypatch.setattr(eureka_client, name, fn)
+    monkeypatch.setattr(api, "run_bot", idle_bot)
+    monkeypatch.setattr(api.settings, "telegram_bot_token", "123456:ABCdef")
+    monkeypatch.setattr(api.settings, "telegram_allowed_user_ids", "1")
+    monkeypatch.setattr(api.settings, "eureka_enabled", True)
+    with TestClient(api.app):
+        pass
+    assert calls == ["init", "stop"]

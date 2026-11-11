@@ -6,6 +6,7 @@ from typing import Literal
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ecc.ayaan_client import AyaanClient
@@ -34,7 +35,7 @@ async def lifespan(app: FastAPI):
         from py_eureka_client import eureka_client as eureka
 
         eureka_client = eureka
-        eureka.init(
+        await eureka.init_async(  # sync init() fails inside a running event loop
             eureka_server=settings.eureka_url,
             app_name=settings.service_name,
             instance_host=settings.eureka_instance_host,
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         if eureka_client:
-            eureka_client.stop()
+            await eureka_client.stop_async()
         await ayaan.aclose()
         await bot.session.close()
 
@@ -94,4 +95,6 @@ async def notify(body: NotifyBody, request: Request, _auth: None = Depends(requi
         except Exception:
             # one blocked user must not stop the rest; caller sees the count
             log.warning("notify send failed for user %s", uid, exc_info=True)
+    if sent == 0 and settings.allowed_user_ids:
+        return JSONResponse({"sent": 0}, status_code=502)  # nobody got it: let ayaan retry
     return {"sent": sent}

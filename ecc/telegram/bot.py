@@ -2,6 +2,8 @@ import functools
 import re
 import time
 import uuid
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from aiogram import Bot, Dispatcher, F
@@ -14,6 +16,9 @@ settings = get_settings()
 
 _KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*-\d+$")
 _PROMPT_TTL = 600
+KST = ZoneInfo("Asia/Seoul")
+ACTIVE = ("QUEUED", "RUNNING", "PAUSED")
+MAX_TEXT = 4000
 # ponytail: in-memory, single instance; prompts are lost on restart (callback then says expired)
 _prompts: dict[str, tuple[str, float]] = {}
 
@@ -76,9 +81,34 @@ def confirm_keyboard(run_data: str) -> InlineKeyboardMarkup:
     ]])
 
 
+def kst(ts: str | None) -> str | None:
+    """ayaan timestamps are naive UTC (or carry an offset): show them as KST MM-DD HH:MM."""
+    if not ts:
+        return None
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+    return dt.astimezone(KST).strftime("%m-%d %H:%M")
+
+
 def _task_line(t: dict) -> str:
-    extra = f" resumeAt={t['resumeAt']}" if t.get("resumeAt") else ""
+    extra = f" 재개 {kst(t['resumeAt'])}" if t.get("resumeAt") else ""
     return f"{t.get('id')} {t.get('issueKey') or '-'} {t.get('toolCd')} {t.get('status')}{extra}"
+
+
+def join_capped(lines: list[str], limit: int = MAX_TEXT) -> str:
+    """Join lines under Telegram's 4096-char cap, ending with '… 외 N건' when cut."""
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        rest = len(lines) - i
+        if len("\n".join([*out, line, f"… 외 {rest}건"])) >= limit:
+            return "\n".join([*out, f"… 외 {rest}건"])
+        out.append(line)
+    return "\n".join(out)
+
+
+async def active_tasks_text(ayaan) -> str:
+    items = [t for s in ACTIVE for t in await ayaan.list_tasks(s)]
+    return join_capped([_task_line(t) for t in items]) or "작업이 없습니다."
 
 
 @guard_ayaan
@@ -172,8 +202,7 @@ def build_dispatcher(ayaan) -> Dispatcher:
     async def tasks(message: Message):
         if deny(message):
             return await message.answer("허용되지 않은 사용자입니다.")
-        items = await ayaan.list_tasks()
-        await message.answer("\n".join(_task_line(t) for t in items) or "작업이 없습니다.")
+        await message.answer(await active_tasks_text(ayaan))
 
     @dp.message(Command("quota"))
     @guard_ayaan
@@ -183,10 +212,10 @@ def build_dispatcher(ayaan) -> Dispatcher:
         d = await ayaan.quotas()
         lines = [
             f"{q.get('toolCd')} {q.get('windowCd')} {q.get('usedPct')}% "
-            f"reset={q.get('resetsAt')} {q.get('status')}"
+            f"reset={kst(q.get('resetsAt')) or '-'} {q.get('status')}"
             for q in d.get("quotas", [])
         ] + [f"! {w}" for w in d.get("warnings", [])]
-        await message.answer("\n".join(lines) or "쿼터 정보가 없습니다.")
+        await message.answer(join_capped(lines) or "쿼터 정보가 없습니다.")
 
     for name in ("resume", "cancel"):
         @dp.message(Command(name))

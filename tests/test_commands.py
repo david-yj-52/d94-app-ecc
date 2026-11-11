@@ -102,3 +102,31 @@ async def test_callback_answers_when_ayaan_down():
     q = FakeQuery("ayn:resume:abc")
     await tg.handle_callback(q, Down())
     assert q.answers == ["ayaan 연결 실패"]
+
+
+async def test_tasks_lists_only_active_statuses_in_kst():
+    asked = []
+
+    class Lister:
+        async def list_tasks(self, status=None):
+            asked.append(status)
+            return [{"id": f"{status[0]}1", "toolCd": "CLAUDE", "status": status,
+                     "resumeAt": "2026-11-11T06:30:00" if status == "PAUSED" else None}]
+
+    text = await tg.active_tasks_text(Lister())
+    assert asked == ["QUEUED", "RUNNING", "PAUSED"]
+    assert text.splitlines()[-1] == "P1 - CLAUDE PAUSED 재개 11-11 15:30"
+
+
+def test_join_capped_truncates_under_4000():
+    lines = [f"line-{i:04d} " + "x" * 90 for i in range(100)]
+    text = tg.join_capped(lines)
+    assert len(text) < 4000 and text.endswith("건")
+    shown = len(text.splitlines()) - 1
+    assert text.splitlines()[-1] == f"… 외 {100 - shown}건"
+    assert tg.join_capped(["a", "b"]) == "a\nb"
+
+
+def test_kst_quota_reset():
+    assert tg.kst("2026-11-10T23:00:00Z") == "11-11 08:00"
+    assert tg.kst(None) is None
