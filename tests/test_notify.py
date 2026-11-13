@@ -89,3 +89,16 @@ def test_lifespan_eureka_uses_async_api(monkeypatch):
     with TestClient(api.app):
         pass
     assert calls == ["init", "stop"]
+
+
+def test_notify_answer_button_validation(monkeypatch):
+    client, bot = _client(monkeypatch)
+    h = {"X-ECC-Token": "t0ken"}
+    ok = {**BODY, "buttons": [{"label": "A", "action": "answer", "requestId": "r1", "choice": 0}]}
+    assert client.post("/api/v1/notify", json=ok, headers=h).status_code == 200
+    assert bot.calls[0][2].inline_keyboard[0][0].callback_data == "ayn:ans:r1:0"
+    for bad in ({"label": "A", "action": "answer", "requestId": "r1"},
+                {"label": "A", "action": "answer", "choice": 0},
+                {"label": "A", "action": "resume"}):
+        r = client.post("/api/v1/notify", json={**BODY, "buttons": [bad]}, headers=h)
+        assert r.status_code == 422

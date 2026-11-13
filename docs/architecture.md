@@ -16,11 +16,12 @@ Telegram ◀──polling──▶ ECC ──X-AYAAN-Token──▶ gateway ─�
 
 ## Notify
 
-요청 `{event, title, body, buttons?: [{label, action: "resume"|"cancel", taskId}]}` → 메시지 `[{event}] {title}\n\n{body}`, 버튼은 `ayn:{action}:{taskId}`. `ECC_TELEGRAM_ALLOWED_USER_IDS` 전원에게 보내며 개별 전송 실패는 건너뛰고 성공 수를 `{sent}`로 반환합니다. 토큰이 틀리면 401.
+요청 `{event, title, body, buttons?: [{label, action: "resume"|"cancel", taskId} | {label, action: "answer", requestId, choice}]}` → 메시지 `[{event}] {title}\n\n{body}`, 버튼은 `ayn:{action}:{taskId}` 또는 `ayn:ans:{requestId}:{choice}`(응답은 ayaan `POST /requests/{id}/answer`, 상세는 L4 telegram-approval). `ECC_TELEGRAM_ALLOWED_USER_IDS` 전원에게 보내며 개별 전송 실패는 건너뛰고 성공 수를 `{sent}`로 반환합니다. 토큰이 틀리면 401.
 
 ## Telegram 명령
 
-- `/run KEY [tool]`: ayaan `GET /issues/KEY` 미리보기 + [실행]/[취소] → `POST /tasks {issueKey, tool, source:"TELEGRAM"}`
+- `/run KEY [tool] [dev]`: ayaan `GET /issues/KEY` 미리보기 + [실행]/[취소] → `POST /tasks {issueKey, tool, source:"TELEGRAM", phase?}` (기본 기획부터, `dev`면 바로 개발)
+- 답변: 요청 알림의 버튼·답장·`/answer` → ayaan `POST /requests/{id}/answer {choice|answer, answeredBy:"tg:<id>"}`, `/waiting` → `GET /requests?status=OPEN`
 - `/task <프롬프트>`: 미리보기 + [실행]. 프롬프트는 callback_data 64바이트 제한 때문에 메모리 dict에 10분간 보관(`ayn:task:<uuid8>`), 재시작·만료 시 재요청 필요.
 - `/tasks`, `/quota`, `/resume <id>`, `/cancel <id>`: ayaan 조회·제어.
 - 생성 응답 409는 "이미 진행 중" 안내로 처리합니다.

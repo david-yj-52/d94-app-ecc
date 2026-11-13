@@ -7,7 +7,7 @@ from typing import Literal
 from aiogram import Bot
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ecc.ayaan_client import AyaanClient
 from ecc.config.settings import get_settings
@@ -67,8 +67,19 @@ async def require_api_token(x_ecc_token: str = Header(default="")):
 
 class NotifyButton(BaseModel):
     label: str
-    action: Literal["resume", "cancel"]
-    taskId: str
+    action: Literal["resume", "cancel", "answer"]
+    taskId: str | None = None
+    requestId: str | None = None
+    choice: int | None = None
+
+    @model_validator(mode="after")
+    def _target(self):
+        if self.action == "answer":
+            if not self.requestId or self.choice is None or not 0 <= self.choice <= 9:
+                raise ValueError("answer needs requestId and choice 0~9")
+        elif not self.taskId:
+            raise ValueError(f"{self.action} needs taskId")
+        return self
 
 
 class NotifyBody(BaseModel):
