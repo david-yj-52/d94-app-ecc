@@ -24,7 +24,7 @@ AGENTS.md (L1)
 
 ## 1. 서비스 요약
 
-- ECC는 Telegram 전용 채널입니다. ayaan(d94-app-ayaan)의 알림을 `POST /api/v1/notify`로 받아 허용 사용자에게 전달하고, Telegram 명령(`/run /task /tasks /quota /resume /cancel`)을 ayaan API(게이트웨이 경유, `X-AYAAN-Token`)로 전달합니다.
+- ECC는 Telegram 전용 채널입니다. ayaan(d94-app-ayaan)의 알림을 `POST /api/v1/notify`로 받아 허용 사용자에게 전달하고, Telegram 명령(`/run /task /tasks /waiting /answer /quota /resume /cancel`)과 요청 알림의 답변 버튼·답장을 ayaan API(게이트웨이 경유, `X-AYAAN-Token`)로 전달합니다.
 - CLI 실행·티켓 저장은 하지 않습니다. `ecc/intent`는 미사용으로 보존합니다.
 
 ## 2. 기술 스택과 명령

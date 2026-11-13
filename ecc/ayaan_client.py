@@ -37,6 +37,13 @@ class AyaanClient:
     async def cancel(self, task_id: str) -> tuple[int, dict]:
         return await self._call("POST", f"/tasks/{task_id}/cancel")
 
+    async def answer(self, request_id: str, body: dict) -> tuple[int, dict]:
+        return await self._call("POST", f"/requests/{request_id}/answer", json=body)
+
+    async def waiting(self) -> list:
+        _, data = await self._call("GET", "/requests", params={"status": "OPEN"})
+        return data or []
+
     async def issue_preview(self, issue_key: str) -> dict | None:
         status, data = await self._call("GET", f"/issues/{issue_key}")
         return data if status == 200 else None

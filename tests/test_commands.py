@@ -45,8 +45,10 @@ def allowed(monkeypatch):
 
 
 def test_parse_run_command():
-    assert tg.parse_run("/run CIRA-12 codex") == ("CIRA-12", "CODEX")
-    assert tg.parse_run("/run CIRA-12") == ("CIRA-12", None)
+    assert tg.parse_run("/run CIRA-12 codex") == ("CIRA-12", "CODEX", "PLAN")
+    assert tg.parse_run("/run CIRA-12") == ("CIRA-12", None, "PLAN")
+    assert tg.parse_run("/run CIRA-12 dev") == ("CIRA-12", None, "DEV")
+    assert tg.parse_run("/run CIRA-12 codex DEV") == ("CIRA-12", "CODEX", "DEV")
     with pytest.raises(ValueError):
         tg.parse_run("/run")
     with pytest.raises(ValueError):
@@ -114,8 +116,8 @@ async def test_tasks_lists_only_active_statuses_in_kst():
                      "resumeAt": "2026-11-11T06:30:00" if status == "PAUSED" else None}]
 
     text = await tg.active_tasks_text(Lister())
-    assert asked == ["QUEUED", "RUNNING", "PAUSED"]
-    assert text.splitlines()[-1] == "P1 - CLAUDE PAUSED 재개 11-11 15:30"
+    assert asked == ["QUEUED", "RUNNING", "PAUSED", "WAITING"]
+    assert text.splitlines()[-2] == "P1 - CLAUDE PAUSED 재개 11-11 15:30"
 
 
 def test_join_capped_truncates_under_4000():
@@ -130,3 +132,81 @@ def test_join_capped_truncates_under_4000():
 def test_kst_quota_reset():
     assert tg.kst("2026-11-10T23:00:00Z") == "11-11 08:00"
     assert tg.kst(None) is None
+
+
+class AnswerAyaan(FakeAyaan):
+    def __init__(self, status=200):
+        super().__init__()
+        self.status = status
+
+    async def answer(self, rid, body):
+        self.calls.append(("answer", rid, body))
+        if self.status == 409:
+            return 409, {"answer": "A", "answeredBy": "tg:2", "answeredAt": "2026-11-13T03:00:00"}
+        return self.status, {"answer": "B안"}
+
+    async def waiting(self):
+        return [{"id": "r1", "kind": "QUESTION", "question": "A or B?", "taskId": "t1"}]
+
+
+async def test_answer_button_records_user_and_removes_buttons():
+    ayaan, q = AnswerAyaan(), FakeQuery("ayn:ans:r-1:1")
+    q.message.text = "[WAITING] 질문\n\n요청 ID: r-1"
+    await tg.handle_callback(q, ayaan)
+    assert ayaan.calls == [("answer", "r-1", {"choice": 1, "answeredBy": "tg:1"})]
+    assert q.edits == ["[WAITING] 질문\n\n요청 ID: r-1\n\n✔ B안 (응답됨)"]
+
+
+async def test_answer_button_already_handled_alerts():
+    ayaan, q = AnswerAyaan(409), FakeQuery("ayn:ans:r-1:0")
+    await tg.handle_callback(q, ayaan)
+    assert q.edits == [] and q.answers[-1].startswith("이미 처리된 요청입니다 (tg:2, 11-13 12:00)")
+
+
+async def test_answer_callback_rejects_bad_choice_and_stranger():
+    ayaan = AnswerAyaan()
+    q = FakeQuery("ayn:ans:r-1:x")
+    await tg.handle_callback(q, ayaan)
+    assert ayaan.calls == [] and q.answers == ["알 수 없는 동작입니다."]
+    q = FakeQuery("ayn:ans:r-1:0", user_id=99)
+    await tg.handle_callback(q, ayaan)
+    assert ayaan.calls == []
+
+
+async def test_run_dev_callback_and_legacy_4_part_data():
+    ayaan = FakeAyaan()
+    await tg.handle_callback(FakeQuery("ayn:run:CIRA-1:-:DEV"), ayaan)
+    await tg.handle_callback(FakeQuery("ayn:run:CIRA-1:-:PLAN"), ayaan)
+    await tg.handle_callback(FakeQuery("ayn:run:CIRA-1:-"), ayaan)
+    phases = [c[1].get("phase") for c in ayaan.calls]
+    assert phases == ["DEV", None, None]
+
+
+def test_answer_keyboard_and_size_limit():
+    rid = "123e4567-e89b-12d3-a456-426614174000"  # query OBJ_ID is a uuid
+    btns = [{"label": f"선택 {i}", "action": "answer", "requestId": rid, "choice": i}
+            for i in range(5)]
+    kb = tg.notify_keyboard(btns)
+    assert len(kb.inline_keyboard) == 5  # >3 buttons: one per row
+    data = kb.inline_keyboard[4][0].callback_data
+    assert data == f"ayn:ans:{rid}:4" and len(data.encode()) <= 64
+    two = tg.notify_keyboard(btns[:2] + [{"label": "취소", "action": "cancel", "taskId": "t"}])
+    assert len(two.inline_keyboard) == 1
+    assert two.inline_keyboard[0][2].callback_data == "ayn:cancel:t"
+
+
+def _reply(text, author_id=42, is_bot=True):
+    author = SimpleNamespace(id=author_id, is_bot=is_bot)
+    return SimpleNamespace(reply_to_message=SimpleNamespace(from_user=author, text=text))
+
+
+def test_reply_request_id_only_from_own_bot():
+    note = "[WAITING] x\n요청 ID: abc-123"
+    assert tg.reply_request_id(_reply(note), 42) == "abc-123"
+    assert tg.reply_request_id(_reply(note, author_id=7), 42) is None  # another bot
+    assert tg.reply_request_id(_reply(note, is_bot=False), 42) is None  # a user's message
+    assert tg.reply_request_id(_reply("no id here"), 42) is None
+
+
+async def test_waiting_text():
+    assert "r1 [QUESTION] A or B? (작업 t1)" in await tg.waiting_text(AnswerAyaan())
